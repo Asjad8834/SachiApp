@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SACHI — Sound Awareness Companion</title>
+
+  <!-- fonts & icons -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://kit.fontawesome.com/a2e0b1f6a4.js" crossorigin="anonymous"></script>
+
+  <!-- tensorflow + yamnet -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/yamnet@0.0.1/dist/yamnet.min.js"></script>
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- LEFT: Controls & Training -->
+    <div class="card left-card">
+      <div class="brand">
+        <div class="logo">S</div>
+        <div>
+          <h1>SACHI</h1>
+          <div class="muted">Sound Awareness Companion</div>
+        </div>
+      </div>
+
+      <div class="listen-area">
+        <div id="listenBtn" class="big-button" title="Start listening">
+          <div class="pulse" style="opacity:0"></div>
+          <div class="icon" aria-hidden>
+            <!-- hearing SVG -->
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none">
+              <path d="M12 3C6.48 3 2 7.48 2 13s4.48 10 10 10 10-4.48 10-10c0-1.3-.23-2.54-.66-3.7" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
+              <path d="M12 7v6l3 1" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="status">
+          <div class="title" id="listenStatus">Idle</div>
+          <div class="small" id="micGround">Microphone not active</div>
+          <div style="margin-top:8px;">
+            <button class="btn ghost" id="toggleLoggingBtn">Pause Logs</button>
+            <button class="btn ghost" id="clearLogsBtn">Clear Logs</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="vis">
+        <div class="canvas-wrap">
+          <canvas id="freqCanvas" width="600" height="60"></canvas>
+        </div>
+        <div style="width:110px;text-align:right">
+          <div class="small-label">Frequency Beam</div>
+          <div class="muted-xx" id="levelText">— dB</div>
+        </div>
+      </div>
+
+      <div class="train-form">
+        <label class="small-label" style="margin-top:6px">Add custom sound</label>
+        <input id="labelName" type="text" placeholder="Name this sound (e.g., 'Doorbell')" />
+        <div class="file-row">
+          <input id="fileInput" type="file" accept="audio/*" />
+          <button id="uploadTrainBtn" class="btn">Use Upload</button>
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="recordSampleBtn" class="btn ghost">Record Sample (2s)</button>
+          <button id="trainBtn" class="btn">Save/Train</button>
+        </div>
+
+        <div class="small-label">Trained sounds</div>
+        <div class="trained-list" id="trainedList"></div>
+
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="exportModelBtn" class="btn ghost">Export</button>
+          <button id="importModelBtn" class="btn ghost">Import</button>
+          <input id="importFile" type="file" accept="application/json" style="display:none" />
+        </div>
+      </div>
+    </div>
+
+    <!-- CENTER: Main & Logs -->
+    <div class="main card">
+      <div class="hero">
+        <div class="hero-icon">🔊</div>
+        <div class="hero-text">
+          <h2>Real-time sound detection</h2>
+          <p>Start listening and SACHI will try to identify and log sounds nearby. Add custom sounds to personalize recognition.</p>
+        </div>
+      </div>
+
+      <div class="log">
+        <h3>Detection logs</h3>
+        <div class="log-list" id="logList"></div>
+      </div>
+
+      <footer>Local-only demo • All audio and model data stays in your browser (localStorage).</footer>
+    </div>
+
+    <!-- RIGHT: status / settings / help -->
+    <div class="right-col">
+      <div class="panel card">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-weight:700">Model status</div>
+            <div class="muted small-label" id="modelSummary">Loading model...</div>
+          </div>
+          <div>
+            <div class="muted small-label" id="storageInfo">Saved: 0</div>
+          </div>
+        </div>
+
+        <hr>
+
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <label class="small-label">Detection sensitivity</label>
+          <input id="sensitivity" type="range" min="0.4" max="0.98" step="0.01" value="0.75">
+          <div class="muted small-label">Similarity threshold: <span id="thresholdLabel">0.75</span></div>
+        </div>
+      </div>
+
+      <div class="panel card">
+        <div style="font-weight:700;margin-bottom:8px">Quick tips</div>
+        <ol class="muted" style="margin:0;padding-left:16px;line-height:1.6;font-size:13px">
+          <li>Record or upload 2–5 examples per custom sound for better matching.</li>
+          <li>Train when background noise is low for cleaner samples.</li>
+          <li>Direction is estimated only if stereo input is available.</li>
+        </ol>
+      </div>
+
+      <div class="panel card">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-weight:700">Controls</div>
+          <div class="muted small-label">v1.1</div>
+        </div>
+        <div style="margin-top:10px" class="controls-row">
+          <button id="downloadLogsBtn" class="btn ghost">Download Logs</button>
+          <button id="resetModelBtn" class="btn danger">Reset Model</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
