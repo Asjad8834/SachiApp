@@ -5,19 +5,19 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>SACHI — Sound Awareness Companion</title>
 
-  <!-- fonts & icons -->
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-  <script src="https://kit.fontawesome.com/a2e0b1f6a4.js" crossorigin="anonymous"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
 
-  <!-- tensorflow + yamnet -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/yamnet@0.0.1/dist/yamnet.min.js"></script>
+  <!-- ✅ Load TensorFlow.js (for local model) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.16.0/dist/tf.min.js"></script>
+
+  <!-- ❌ Removed: external YamNet model CDN (we're using your local one instead) -->
+  <!-- <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/yamnet@0.0.7/dist/yamnet.min.js"></script> -->
 
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="app">
-
     <!-- LEFT: Controls & Training -->
     <div class="card left-card">
       <div class="brand">
@@ -32,10 +32,9 @@
         <div id="listenBtn" class="big-button" title="Start listening">
           <div class="pulse" style="opacity:0"></div>
           <div class="icon" aria-hidden>
-            <!-- hearing SVG -->
             <svg width="36" height="36" viewBox="0 0 24 24" fill="none">
-              <path d="M12 3C6.48 3 2 7.48 2 13s4.48 10 10 10 10-4.48 10-10c0-1.3-.23-2.54-.66-3.7" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
-              <path d="M12 7v6l3 1" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
+              <path d="M12 3C6.48 3 2 7.48 2 13s4.48 10 10 10 10-4.48 10-10c0-1.3-.23-2.54-.66-3.7" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.95" />
+              <path d="M12 7v6l3 1" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.95" />
             </svg>
           </div>
         </div>
@@ -60,6 +59,16 @@
         </div>
       </div>
 
+      <!-- Model selection -->
+      <div class="model-switch">
+        <label class="small-label">Select Model</label>
+        <select id="modelSelector">
+          <option value="google" selected>Google YamNet</option>
+          <option value="custom">Custom Trained</option>
+        </select>
+      </div>
+
+      <!-- Training Form -->
       <div class="train-form">
         <label class="small-label" style="margin-top:6px">Add custom sound</label>
         <input id="labelName" type="text" placeholder="Name this sound (e.g., 'Doorbell')" />
@@ -90,7 +99,7 @@
         <div class="hero-icon">🔊</div>
         <div class="hero-text">
           <h2>Real-time sound detection</h2>
-          <p>Start listening and SACHI will try to identify and log sounds nearby. Add custom sounds to personalize recognition.</p>
+          <p>SACHI listens to your environment using AI models and classifies sounds live. Add your custom sounds for personalized recognition.</p>
         </div>
       </div>
 
@@ -102,7 +111,7 @@
       <footer>Local-only demo • All audio and model data stays in your browser (localStorage).</footer>
     </div>
 
-    <!-- RIGHT: status / settings / help -->
+    <!-- RIGHT: Status / Settings / Help -->
     <div class="right-col">
       <div class="panel card">
         <div style="display:flex;justify-content:space-between;align-items:center">
@@ -136,7 +145,7 @@
       <div class="panel card">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div style="font-weight:700">Controls</div>
-          <div class="muted small-label">v1.1</div>
+          <div class="muted small-label">v1.2</div>
         </div>
         <div style="margin-top:10px" class="controls-row">
           <button id="downloadLogsBtn" class="btn ghost">Download Logs</button>
@@ -146,6 +155,7 @@
     </div>
   </div>
 
+  <!-- ✅ Load main script last -->
   <script src="script.js"></script>
 </body>
 </html>
