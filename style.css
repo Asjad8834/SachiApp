@@ -82,9 +82,8 @@ input[type="text"]{padding:10px;border-radius:10px;border:1px solid rgba(255,255
 .log{margin-top:18px;border-radius:12px;padding:14px;background:linear-gradient(180deg, rgba(255,255,255,0.012), transparent)}
 .log h3{margin:0 0 8px 0}
 .log-list{display:flex;flex-direction:column;gap:8px;max-height:420px;overflow:auto;padding-right:6px}
-.log-item{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.02);}
+.log-item{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px;border:1px solid rgba(255,255,255,0.02);border-radius:10px}
 .log-item .left{display:flex;gap:12px;align-items:center}
-.badge{background:linear-gradient(90deg,var(--accent1),var(--accent2));padding:6px 10px;border-radius:999px;color:#022734;font-weight:700;font-size:13px}
 
 /* right */
 .right-col{display:flex;flex-direction:column;gap:12px}
