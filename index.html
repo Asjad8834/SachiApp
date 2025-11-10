@@ -7,18 +7,25 @@
 
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
-
-  <!-- ✅ Load TensorFlow.js (for local model) -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.16.0/dist/tf.min.js"></script>
-
-  <!-- ❌ Removed: external YamNet model CDN (we're using your local one instead) -->
-  <!-- <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/yamnet@0.0.7/dist/yamnet.min.js"></script> -->
-
   <link rel="stylesheet" href="style.css" />
+  <style>
+    /* tiny additions only for canvas height + debug table visuals */
+    #freqCanvas { height: 72px; }
+    .debug-wrap { margin-top: 8px; }
+    .debug-head { display:flex;align-items:center;gap:8px;margin:4px 0 6px 0 }
+    #debugPanel { display:none; border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:10px; background:#0b1220 }
+    #debugTable { width:100%; border-collapse:collapse; font-size:13px }
+    #debugTable th, #debugTable td { padding:6px 8px; text-align:left; border-bottom:1px dashed rgba(255,255,255,0.06) }
+    #debugTable th { color:#9aa0a6; font-weight:600 }
+    #debugHint { color:#9aa0a6; font-size:12px; margin-top:6px }
+  </style>
+
+  <!-- TFJS (kept external so your local model works exactly as before) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.16.0/dist/tf.min.js"></script>
 </head>
 <body>
   <div class="app">
-    <!-- LEFT: Controls & Training -->
+    <!-- LEFT -->
     <div class="card left-card">
       <div class="brand">
         <div class="logo">S</div>
@@ -51,15 +58,14 @@
 
       <div class="vis">
         <div class="canvas-wrap">
-          <canvas id="freqCanvas" width="600" height="60"></canvas>
+          <canvas id="freqCanvas" width="600" height="72"></canvas>
         </div>
         <div style="width:110px;text-align:right">
           <div class="small-label">Frequency Beam</div>
-          <div class="muted-xx" id="levelText">— dB</div>
+          <div class="muted-xx" id="levelText">— (level)</div>
         </div>
       </div>
 
-      <!-- Model selection -->
       <div class="model-switch">
         <label class="small-label">Select Model</label>
         <select id="modelSelector">
@@ -68,7 +74,6 @@
         </select>
       </div>
 
-      <!-- Training Form -->
       <div class="train-form">
         <label class="small-label" style="margin-top:6px">Add custom sound</label>
         <input id="labelName" type="text" placeholder="Name this sound (e.g., 'Doorbell')" />
@@ -93,7 +98,7 @@
       </div>
     </div>
 
-    <!-- CENTER: Main & Logs -->
+    <!-- CENTER -->
     <div class="main card">
       <div class="hero">
         <div class="hero-icon">🔊</div>
@@ -104,14 +109,31 @@
       </div>
 
       <div class="log">
-        <h3>Detection logs</h3>
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <h3>Detection logs</h3>
+          <div class="debug-wrap">
+            <div class="debug-head">
+              <button id="debugToggle" class="btn ghost">Show Raw Top-5</button>
+            </div>
+          </div>
+        </div>
+        <div id="debugPanel">
+          <table id="debugTable">
+            <thead><tr><th>Rank</th><th>Class</th><th>Confidence</th></tr></thead>
+            <tbody id="debugBody">
+              <tr><td>—</td><td>—</td><td>—</td></tr>
+            </tbody>
+          </table>
+          <div id="debugHint">Top-5 labels and confidence from the pretrained model (after VAD gate).</div>
+        </div>
+
         <div class="log-list" id="logList"></div>
       </div>
 
       <footer>Local-only demo • All audio and model data stays in your browser (localStorage).</footer>
     </div>
 
-    <!-- RIGHT: Status / Settings / Help -->
+    <!-- RIGHT -->
     <div class="right-col">
       <div class="panel card">
         <div style="display:flex;justify-content:space-between;align-items:center">
@@ -136,7 +158,7 @@
       <div class="panel card">
         <div style="font-weight:700;margin-bottom:8px">Quick tips</div>
         <ol class="muted" style="margin:0;padding-left:16px;line-height:1.6;font-size:13px">
-          <li>Record or upload 2–5 examples per custom sound for better matching.</li>
+          <li>Record or upload 2-5 examples per custom sound for better matching.</li>
           <li>Train when background noise is low for cleaner samples.</li>
           <li>Direction is estimated only if stereo input is available.</li>
         </ol>
@@ -145,7 +167,7 @@
       <div class="panel card">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div style="font-weight:700">Controls</div>
-          <div class="muted small-label">v1.2</div>
+          <div class="muted small-label">v1.2.2</div>
         </div>
         <div style="margin-top:10px" class="controls-row">
           <button id="downloadLogsBtn" class="btn ghost">Download Logs</button>
@@ -155,7 +177,6 @@
     </div>
   </div>
 
-  <!-- ✅ Load main script last -->
   <script src="script.js"></script>
 </body>
 </html>
