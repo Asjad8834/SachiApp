@@ -35,6 +35,8 @@
         </div>
       </div>
 
+      
+
       <div class="listen-area">
         <div id="listenBtn" class="big-button" title="Start listening">
           <div class="pulse" style="opacity:0"></div>
@@ -108,6 +110,8 @@
         </div>
       </div>
 
+      
+
       <div class="log">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <h3>Detection logs</h3>
@@ -164,6 +168,12 @@
         </ol>
       </div>
 
+      <canvas id="compassCanvas" width="180" height="180" style="width:180px;height:180px;border-radius:12px;background:rgba(255,255,255,0.03)"></canvas>
+<div class="muted-xx" style="margin-top:6px">
+  <span id="dirText">Unknown</span> • <span id="azText">0°</span>
+</div>
+
+
       <div class="panel card">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div style="font-weight:700">Controls</div>
@@ -176,6 +186,8 @@
       </div>
     </div>
   </div>
+
+  
 
   <script src="script.js"></script>
 </body>
