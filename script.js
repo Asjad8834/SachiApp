@@ -1,10 +1,8 @@
-// SACHI v1.2.6 — complete JS (Compass + robust Speech mapping + relaxed gating)
-// Changes vs your last file:
-// 1) Lowered PRETRAINED_MIN_CONF to 0.08 and added dynamic override for Speech when RMS is high.
-// 2) Never silently return if we have a label; we always emit a log when VAD is open.
-// 3) Kept your compass + class_map fixes. Nothing else touched.
+// SACHI v1.2.4 — complete JS + Compass
+// Fixes: reliable frequency beam, VAD gate, temporal smoothing, confidence in logs, Top-5 debug.
+// Adds: live stereo compass (ILD-based), smoothed & colorful dial.
 
-// ======================== Selectors ========================
+//////////////////////// Selectors ////////////////////////
 const listenBtn = document.getElementById('listenBtn');
 const listenStatus = document.getElementById('listenStatus');
 const micGround = document.getElementById('micGround');
@@ -33,12 +31,12 @@ const debugToggle = document.getElementById('debugToggle');
 const debugPanel = document.getElementById('debugPanel');
 const debugBody = document.getElementById('debugBody');
 
-// Compass (optional)
+// Compass selectors (optional in DOM; code guards if missing)
 const compassCanvas = document.getElementById('compassCanvas');
 const dirText = document.getElementById('dirText');
 const azText = document.getElementById('azText');
 
-// ======================== Constants / State ========================
+//////////////////////// Constants / State ////////////////////////
 const MODEL_KEY = 'sachi_model_v1';
 const LOGS_KEY = 'sachi_logs_v1';
 
@@ -46,25 +44,22 @@ const TFHUB_YAMNET_URL = 'https://tfhub.dev/google/tfjs-model/yamnet/classificat
 const LOCAL_YAMNET_PATH = './models/yamnet/model.json';
 const CLASS_MAP_URL = './models/yamnet/class_map.json';
 
-const MIN_YAMNET_LEN = 15600;
+const MIN_YAMNET_LEN = 15600;     // ~0.975s at 16kHz
 const TARGET_SR = 16000;
-const RING_SECONDS = 1.0;
-const CLASSIFY_INTERVAL_MS = 900;
+const RING_SECONDS = 1.0;         // capture window
+const CLASSIFY_INTERVAL_MS = 900; // throttle
 
-// ---- RELAXED GATING (fix for empty logs) ----
-const PRETRAINED_MIN_CONF = 0.08;     // was 0.15
-const SPEECH_RMS_OVERRIDE = 0.028;    // if RMS >= this and label looks like speech, log anyway
-
-const VAD_RMS_GATE = 0.015;
-const SMOOTH_WINDOW = 5;
+const PRETRAINED_MIN_CONF = 0.15; // minimum YAMNet confidence
+const VAD_RMS_GATE = 0.015;       // silence gate
+const SMOOTH_WINDOW = 5;          // majority vote window
 const FREQ_BINS_TARGET = 64;
 
 let yamnetModel = null;
-let CLASS_MAP = null;
+let CLASS_MAP = null;             // array of class names by index
 
 let audioContext = null;
 let micStream = null;
-let analyser = null;
+let analyser = null;              // mixed visualiser
 let freqDataArray = null;
 let timeDataArray = null;
 let rafId = null;
@@ -74,21 +69,25 @@ let lastCapturedVector = null;
 let logs = [];
 let loggingPaused = false;
 
-let model = { labels: {} };
+let model = { labels: {} };       // custom-label cosine-sim vectors
 
+// ring buffer for 1s audio
 let ringBuffer = new Float32Array(16000);
 let ringWrite = 0;
 let ringTotalWritten = 0;
 
 // Stereo compass nodes/state
-let splitNode = null, analyserL = null, analyserR = null;
-let timeL = null, timeR = null;
-let compassAngleTarget = 0;    // -90..+90
-let compassAngleSmoothed = 0;  // animated
+let splitNode = null;
+let analyserL = null;
+let analyserR = null;
+let timeL = null;
+let timeR = null;
+let compassAngleTarget = 0;   // -90..+90 (Left..Right)
+let compassAngleSmoothed = 0; // animated
 let lastDirLabel = 'Unknown';
 let lastAzDeg = 0;
-let lastEnergyRMS = 0;
 
+// icon helpers
 const iconMap = {
   Speech: 'fa-user',
   Vehicle: 'fa-car',
@@ -99,15 +98,15 @@ const iconMap = {
   Other:  'fa-wave-square'
 };
 const yamnetFriendly = [
-  { pattern: /speech|conversation|talk|narration|whisper|spoken|voice/ig, label: 'Speech' },
+  { pattern: /speech|conversation|talk|narration|whisper/ig, label: 'Speech' },
   { pattern: /car|vehicle|automobile|engine|horn|traffic/ig, label: 'Vehicle' },
   { pattern: /dog|bark|woof/ig, label: 'Dog' },
   { pattern: /bell|doorbell|chime/ig, label: 'Bell' },
   { pattern: /siren|ambulance|police|fire truck/ig, label: 'Siren' },
-  { pattern: /music|sing|song|melody|instrument|piano|guitar|violin|drum/ig, label: 'Music' }
+  { pattern: /music|sing|song|melody|instrument/ig, label: 'Music' }
 ];
 
-// ======================== Utils ========================
+//////////////////////// Utils ////////////////////////
 function nowIso(){ return new Date().toISOString(); }
 function cosineSim(a,b){
   if(!a||!b||a.length!==b.length) return 0;
@@ -137,16 +136,16 @@ function iconForFriendly(label){
   if(!label) return iconMap.Other;
   if(iconMap[label]) return iconMap[label];
   const l=label.toLowerCase();
-  if(l.includes('speech')||l.includes('talk')||l.includes('voice')) return iconMap.Speech;
-  if(l.includes('car')||l.includes('vehicle')||l.includes('engine')||l.includes('horn')) return iconMap.Vehicle;
+  if(l.includes('speech')||l.includes('talk')) return iconMap.Speech;
+  if(l.includes('car')||l.includes('vehicle')||l.includes('engine')) return iconMap.Vehicle;
   if(l.includes('dog')||l.includes('bark')) return iconMap.Dog;
   if(l.includes('bell')||l.includes('doorbell')||l.includes('chime')) return iconMap.Bell;
   if(l.includes('siren')) return iconMap.Siren;
-  if(l.includes('music')||l.includes('sing')||l.includes('song')||l.includes('instrument')) return iconMap.Music;
+  if(l.includes('music')||l.includes('sing')) return iconMap.Music;
   return iconMap.Other;
 }
 
-// ======================== Persistence ========================
+//////////////////////// Persistence ////////////////////////
 function loadModel(){
   try{
     const raw = localStorage.getItem(MODEL_KEY);
@@ -170,7 +169,7 @@ function saveModel(){
 function loadLogs(){ try{ logs = JSON.parse(localStorage.getItem(LOGS_KEY)||'[]'); }catch{ logs=[]; } renderLogs(); }
 function saveLogs(){ try{ localStorage.setItem(LOGS_KEY, JSON.stringify(logs)); }catch{} }
 
-// ======================== UI ========================
+//////////////////////// UI ////////////////////////
 function updateUIModel(){
   trainedList.innerHTML = '';
   const keys = Object.keys(model.labels);
@@ -216,9 +215,10 @@ function renderLogs(){
   }
 }
 
-// ======================== Visualizer ========================
+//////////////////////// Visualizer — frequency beam (fixed) ////////////////////////
 const canvas = freqCanvas;
 const ctx = canvas.getContext('2d');
+
 function fixCanvasSize(){
   const ratio = window.devicePixelRatio || 1;
   const cssW = freqCanvas.clientWidth || 520;
@@ -255,16 +255,17 @@ function drawVisualizer(){
   }
 }
 
-// ======================== Compass ========================
+//////////////////////// Compass (dial + animation) ////////////////////////
 let compassCtx = null;
 if (compassCanvas) {
   const ratio = window.devicePixelRatio || 1;
-  const size = 260;
+  const size = 260; // canvas css size (set in your CSS)
   compassCanvas.width = size * ratio;
   compassCanvas.height = size * ratio;
   compassCtx = compassCanvas.getContext('2d');
   compassCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
 }
+
 function drawCompass(angleDeg, energy=0){
   if(!compassCtx) return;
   const ctxC = compassCtx;
@@ -274,52 +275,87 @@ function drawCompass(angleDeg, energy=0){
 
   ctxC.clearRect(0,0,W,H);
 
+  // dial background
   const grd = ctxC.createRadialGradient(cx, cy, r*0.2, cx, cy, r*1.1);
-  grd.addColorStop(0, '#0f1a2c'); grd.addColorStop(1, '#0a1020');
-  ctxC.fillStyle = grd; ctxC.beginPath(); ctxC.arc(cx,cy,r*1.05,0,Math.PI*2); ctxC.fill();
+  grd.addColorStop(0, '#0f1a2c');
+  grd.addColorStop(1, '#0a1020');
+  ctxC.fillStyle = grd;
+  ctxC.beginPath(); ctxC.arc(cx,cy,r*1.05,0,Math.PI*2); ctxC.fill();
 
+  // arc color sides
   ctxC.lineWidth = 12;
-  ctxC.strokeStyle = '#56CCF2'; ctxC.beginPath(); ctxC.arc(cx,cy,r,Math.PI*0.65,Math.PI*1.35); ctxC.stroke();
-  ctxC.strokeStyle = '#2F80ED'; ctxC.beginPath(); ctxC.arc(cx,cy,r,Math.PI*1.35,Math.PI*0.65,true); ctxC.stroke();
+  // left (blue)
+  ctxC.strokeStyle = '#56CCF2';
+  ctxC.beginPath(); ctxC.arc(cx,cy,r,Math.PI*0.65,Math.PI*1.35); ctxC.stroke();
+  // right (cyan)
+  ctxC.strokeStyle = '#2F80ED';
+  ctxC.beginPath(); ctxC.arc(cx,cy,r,Math.PI*1.35,Math.PI*0.65,true); ctxC.stroke();
 
-  ctxC.save(); ctxC.translate(cx,cy);
-  for(let i=-90;i<=90;i+=10){
-    const a=(i-90)*Math.PI/180, len=(i%30===0)?12:6;
-    ctxC.strokeStyle='rgba(255,255,255,0.25)'; ctxC.lineWidth=2;
-    const x1=Math.cos(a)*(r-6), y1=Math.sin(a)*(r-6);
-    const x2=Math.cos(a)*(r-6-len), y2=Math.sin(a)*(r-6-len);
+  // ticks
+  ctxC.save();
+  ctxC.translate(cx,cy);
+  for(let i=-90; i<=90; i+=10){
+    const a = (i-90) * Math.PI/180;
+    const len = (i%30===0)? 12 : 6;
+    ctxC.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctxC.lineWidth = 2;
+    const x1 = Math.cos(a)*(r-6);
+    const y1 = Math.sin(a)*(r-6);
+    const x2 = Math.cos(a)*(r-6-len);
+    const y2 = Math.sin(a)*(r-6-len);
     ctxC.beginPath(); ctxC.moveTo(x1,y1); ctxC.lineTo(x2,y2); ctxC.stroke();
   }
   ctxC.restore();
 
+  // needle (angleDeg: -90..+90)
   const aRad = (angleDeg - 90) * Math.PI/180;
-  const needleLen = r*0.9;
-  ctxC.save(); ctxC.translate(cx,cy); ctxC.rotate(aRad);
-  ctxC.strokeStyle='rgba(0,0,0,0.45)'; ctxC.lineWidth=8;
+  const needleLen = r * 0.9;
+  ctxC.save();
+  ctxC.translate(cx,cy);
+  ctxC.rotate(aRad);
+
+  // shadow
+  ctxC.strokeStyle = 'rgba(0,0,0,0.45)';
+  ctxC.lineWidth = 8;
   ctxC.beginPath(); ctxC.moveTo(0,0); ctxC.lineTo(needleLen,0); ctxC.stroke();
-  ctxC.strokeStyle = energy>0.02 ? '#7CF9A5' : '#9aa7b2';
-  ctxC.lineWidth=6; ctxC.beginPath(); ctxC.moveTo(0,0); ctxC.lineTo(needleLen,0); ctxC.stroke();
-  ctxC.fillStyle='#e6eef6'; ctxC.beginPath(); ctxC.arc(0,0,6,0,Math.PI*2); ctxC.fill();
+
+  // colored needle
+  ctxC.strokeStyle = energy > 0.02 ? '#7CF9A5' : '#9aa7b2';
+  ctxC.lineWidth = 6;
+  ctxC.beginPath(); ctxC.moveTo(0,0); ctxC.lineTo(needleLen,0); ctxC.stroke();
+
+  // hub
+  ctxC.fillStyle = '#e6eef6';
+  ctxC.beginPath(); ctxC.arc(0,0,6,0,Math.PI*2); ctxC.fill();
   ctxC.restore();
 }
+
+// simple low-pass smoothing for needle animation
 function animateCompass(){
+  // ease toward target
   const alpha = 0.15;
-  compassAngleSmoothed += alpha*(compassAngleTarget - compassAngleSmoothed);
+  compassAngleSmoothed = compassAngleSmoothed + alpha*(compassAngleTarget - compassAngleSmoothed);
   drawCompass(compassAngleSmoothed, lastEnergyRMS);
   requestAnimationFrame(animateCompass);
 }
 
-// ======================== Model loading ========================
+// live channel energy (for compass)
+let lastEnergyRMS = 0;
+
+//////////////////////// Model loading (keeps your order) ////////////////////////
 async function loadYamnet(){
   modelSummary.textContent = 'Loading pretrained model...';
 
+  // 1) Local GraphModel
   try{
     yamnetModel = await tf.loadGraphModel(LOCAL_YAMNET_PATH);
     yamnetModel.__isLocal = true;
+    console.info('[YAMNet] local GraphModel loaded');
     modelSummary.textContent = 'Local YAMNet TFJS GraphModel loaded.';
     return;
   }catch(e){ console.warn('[YAMNet] local load failed, fallback...', e); }
 
+  // 2) npm model
   try{
     if(typeof yamnet === 'undefined' || !yamnet){
       await loadScriptDynamic('https://cdn.jsdelivr.net/npm/@tensorflow-models/yamnet@1.0.2/dist/yamnet.min.js');
@@ -327,14 +363,17 @@ async function loadYamnet(){
     }
     if(yamnet && typeof yamnet.load==='function'){
       yamnetModel = await yamnet.load();
+      console.info('[YAMNet] npm model loaded');
       modelSummary.textContent = 'Pretrained model loaded (YAMNet)';
       return;
     }
   }catch(e){ console.warn('[YAMNet] npm load failed', e); }
 
+  // 3) TFHub GraphModel
   try{
     yamnetModel = await tf.loadGraphModel(TFHUB_YAMNET_URL, { fromTFHub:true });
     yamnetModel.__isTFHubGraphModel = true;
+    console.info('[YAMNet] TFHub GraphModel loaded');
     modelSummary.textContent = 'Pretrained model loaded (TFHub)';
   }catch(e){
     console.error('[YAMNet] TFHub load failed', e);
@@ -343,51 +382,20 @@ async function loadYamnet(){
   }
 }
 
-// Robust class-map loader (accepts multiple shapes)
 async function loadClassMap(){
   try{
     const res = await fetch(CLASS_MAP_URL, { cache:'no-store' });
     if(!res.ok) throw new Error('class_map.json not found');
     const data = await res.json();
-
-    const tryExtract = (d)=>{
-      if(Array.isArray(d) && typeof d[0]==='string') return d.slice();
-      if(d && Array.isArray(d.class_names)) return d.class_names.slice();
-      if(d && Array.isArray(d.classes) && typeof d.classes[0]==='string') return d.classes.slice();
-      if(d && Array.isArray(d.classes) && typeof d.classes[0]==='object'){
-        return d.classes.map(x=> x.display_name || x.name || x.label || '');
-      }
-      return null;
-    };
-
-    let arr = tryExtract(data);
-    if(!arr) throw new Error('Unsupported class_map format');
-    arr = arr.map((x,idx)=> (x && String(x).trim().length) ? String(x) : `class_${idx}`);
-    CLASS_MAP = arr;
-    console.info('[YAMNet] class_map loaded:', CLASS_MAP.length);
+    CLASS_MAP = Array.isArray(data) ? data : (Array.isArray(data.classes) ? data.classes : null);
+    console.info('[YAMNet] class_map loaded:', CLASS_MAP ? CLASS_MAP.length : 0);
   }catch(e){
     CLASS_MAP = null;
-    console.warn('No/invalid class_map.json — labels may show as class_###', e);
+    console.warn('No class_map.json — labels may show as class_###', e);
   }
 }
 
-// Coerce to Speech/friendly where possible
-function sanitizeLabel(rawLabel, top5){
-  const looksSpeech = (s)=> /speech|talk|narration|whisper|spoken|voice/i.test(s||'');
-  if(looksSpeech(rawLabel)) return 'Speech';
-  if(Array.isArray(top5) && top5.some(t=> looksSpeech(t.label))) return 'Speech';
-  const fr = friendlyFromRawLabel(rawLabel);
-  if(fr) return fr;
-  if(/^class_\d+$/i.test(rawLabel) && Array.isArray(top5)){
-    for(const t of top5){
-      const f = friendlyFromRawLabel(t.label);
-      if(f) return f;
-    }
-  }
-  return rawLabel || 'Other';
-}
-
-// ======================== Audio helpers ========================
+//////////////////////// Audio helpers ////////////////////////
 async function ensureAudioCtx(){
   if(!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
 }
@@ -421,7 +429,13 @@ function padToMinLen(arr, minLen=MIN_YAMNET_LEN){
   if(arr.length>=minLen) return arr;
   const out = new Float32Array(minLen); out.set(arr); return out;
 }
-function estimateDirection(){ return lastDirLabel || 'Unknown'; }
+
+// (kept for API compatibility; now uses live stereo state)
+function estimateDirection(){
+  return lastDirLabel || 'Unknown';
+}
+
+// rough spectral embedding if YAMNet unavailable
 function computeSimpleSpectrum(float32Buffer, sampleRate, bins=FREQ_BINS_TARGET){
   const res = resampleBuffer(float32Buffer, sampleRate, 8000);
   const window = 1024;
@@ -435,8 +449,8 @@ function computeSimpleSpectrum(float32Buffer, sampleRate, bins=FREQ_BINS_TARGET)
   return normalizeVec(Array.from(mags));
 }
 
-// ======================== Classification + Top-5 ========================
-const smoothQueue = [];
+//////////////////////// Classification + Top-5 ////////////////////////
+const smoothQueue = []; // {label, score, friendly}
 function pushAndVote(pred){
   smoothQueue.push(pred);
   while(smoothQueue.length > SMOOTH_WINDOW) smoothQueue.shift();
@@ -491,24 +505,25 @@ async function classifyBuffer(float32Buffer, sampleRate){
         }
 
         if(scoresArr){
-          const idScores = scoresArr.map((v,idx)=>({idx, v})).sort((a,b)=> b.v-a.v);
-          const max = idScores[0];
-          const idxToName = (i)=> (CLASS_MAP && CLASS_MAP[i]) ? CLASS_MAP[i] : `class_${i}`;
-          const maxName = idxToName(max.idx);
-          top5 = idScores.slice(0,5).map(e=>({ label: idxToName(e.idx), score: e.v }));
-          const clean = sanitizeLabel(maxName, top5);
-          pretrained = { label: clean, score: scoresArr[max.idx], rawIndex: max.idx };
+          let maxIdx=0; for(let i=1;i<scoresArr.length;i++) if(scoresArr[i]>scoresArr[maxIdx]) maxIdx=i;
+          const labelFromMap = (CLASS_MAP && CLASS_MAP[maxIdx]) ? CLASS_MAP[maxIdx] : `class_${maxIdx}`;
+          pretrained = { label: labelFromMap, score: scoresArr[maxIdx], rawIndex: maxIdx };
+
+          const idxs = scoresArr.map((v,idx)=>({idx,v})).sort((a,b)=>b.v-a.v).slice(0,5);
+          top5 = idxs.map(e=>{
+            const nm = (CLASS_MAP && CLASS_MAP[e.idx]) ? CLASS_MAP[e.idx] : `class_${e.idx}`;
+            return { label:nm, score:e.v };
+          });
+
           embedding = Array.from(scoresArr);
         }
         t.dispose && t.dispose();
       }else if(typeof yamnetModel.classify==='function'){
         const preds = await yamnetModel.classify(waveform);
         if(Array.isArray(preds) && preds.length){
-          const sorted = preds.slice().sort((a,b)=> b.score-a.score);
-          const top = sorted[0];
-          const clean = sanitizeLabel(top.className || 'Other', sorted);
-          pretrained = { label: clean, score: +top.score || 0 };
-          top5 = sorted.slice(0,5).map(p=>({label:sanitizeLabel(p.className,preds), score:+p.score||0}));
+          const top = preds.reduce((a,b)=> (b.score>a.score?b:a));
+          pretrained = { label: top.className || 'Other', score: +top.score || 0 };
+          top5 = preds.slice(0,5).map(p=>({label:p.className, score:+p.score||0}));
         }
         if(typeof yamnetModel.embed==='function'){
           const embT = await yamnetModel.embed(waveform);
@@ -535,7 +550,7 @@ async function classifyBuffer(float32Buffer, sampleRate){
   return { pretrained, custom: bestCustom, friendly, embedding, top5 };
 }
 
-// ======================== Capture & Train ========================
+//////////////////////// Capture & Train ////////////////////////
 async function captureAudioSampleFromURL(url, captureMs=1400){
   await ensureAudioCtx(); setupAnalyser();
   return new Promise((resolve, reject)=>{
@@ -673,7 +688,7 @@ if(debugToggle && debugPanel){
   });
 }
 
-// ======================== Start/Stop ========================
+//////////////////////// Start/Stop ////////////////////////
 listenBtn.addEventListener('click', ()=>{ if(!listening) startListening(); else stopListening(); });
 
 async function startListening(){
@@ -686,16 +701,19 @@ async function startListening(){
     micStream = stream;
     const src = audioContext.createMediaStreamSource(stream);
     setupAnalyser();
+    // connect to mixed analyser for visuals
     src.connect(analyser);
 
-    // Stereo path for compass
+    // ----- persistent stereo path for compass -----
     try{
       splitNode = audioContext.createChannelSplitter(2);
       src.connect(splitNode);
       analyserL = audioContext.createAnalyser();
       analyserR = audioContext.createAnalyser();
-      analyserL.fftSize = 1024; analyserR.fftSize = 1024;
-      analyserL.smoothingTimeConstant = 0.6; analyserR.smoothingTimeConstant = 0.6;
+      analyserL.fftSize = 1024;
+      analyserR.fftSize = 1024;
+      analyserL.smoothingTimeConstant = 0.6;
+      analyserR.smoothingTimeConstant = 0.6;
       splitNode.connect(analyserL, 0);
       splitNode.connect(analyserR, 1);
       timeL = new Float32Array(analyserL.fftSize);
@@ -709,7 +727,7 @@ async function startListening(){
     listenBtn.classList.add('active');
     listenStatus.textContent='Listening'; micGround.textContent='Microphone active';
     listening=true; const pulse=document.querySelector('.pulse'); if(pulse) pulse.style.opacity='1';
-    if (compassCtx) requestAnimationFrame(animateCompass);
+    if (compassCtx) requestAnimationFrame(animateCompass); // start needle loop
     updateLoop();
   }catch(e){ console.error(e); alert('Microphone access required.'); }
 }
@@ -717,57 +735,62 @@ function stopListening(){
   listenBtn.classList.remove('active');
   listenStatus.textContent='Idle'; micGround.textContent='Microphone not active';
   micStream && micStream.getTracks().forEach(t=>t.stop()); micStream=null;
-  try{ splitNode && splitNode.disconnect(); analyserL && analyserL.disconnect(); analyserR && analyserR.disconnect(); }catch{}
+  try{
+    splitNode && splitNode.disconnect(); analyserL && analyserL.disconnect(); analyserR && analyserR.disconnect();
+  }catch{}
   splitNode = analyserL = analyserR = null;
   rafId && cancelAnimationFrame(rafId); listening=false;
   const pulse=document.querySelector('.pulse'); if(pulse) pulse.style.opacity='0';
 }
 
-// ======================== Loop ========================
+//////////////////////// Loop (drawing + VAD + smoothing) ////////////////////////
 let lastClassifiedAt = 0;
 
 async function updateLoop(){
   rafId = requestAnimationFrame(updateLoop);
   try{
+    // Always draw the frequency beam
     drawVisualizer();
+
     if(!analyser) return;
 
-    // RMS for VAD / label
+    // RMS energy for VAD / level label
     analyser.getFloatTimeDomainData(timeDataArray);
     let sum=0; for(let i=0;i<timeDataArray.length;i++){ const x=timeDataArray[i]; sum += x*x; }
     const rms = Math.sqrt(sum / timeDataArray.length);
     levelText.textContent = Math.round(rms*10000) + ' (level)';
-    lastEnergyRMS = rms;
 
-    // Stereo energy for compass
+    // ---- live stereo read for compass ----
     if(analyserL && analyserR && timeL && timeR){
       analyserL.getFloatTimeDomainData(timeL);
       analyserR.getFloatTimeDomainData(timeR);
-      let sL=0,sR=0; for(let i=0;i<timeL.length;i++){ sL+=timeL[i]*timeL[i]; sR+=timeR[i]*timeR[i]; }
-      const rmsL = Math.sqrt(sL/timeL.length), rmsR = Math.sqrt(sR/timeR.length);
+      let sL=0,sR=0;
+      for(let i=0;i<timeL.length;i++){ sL+=timeL[i]*timeL[i]; sR+=timeR[i]*timeR[i]; }
+      const rmsL = Math.sqrt(sL/timeL.length);
+      const rmsR = Math.sqrt(sR/timeR.length);
+      lastEnergyRMS = Math.max(rmsL, rmsR);
+
+      // compute ILD-based azimuth in [-90,90]
       const eps = 1e-7;
-      const ild = (rmsR - rmsL) / (rmsR + rmsL + eps); // -1..+1
+      const ild = (rmsR - rmsL) / (rmsR + rmsL + eps);   // -1..+1
       const angle = Math.max(-90, Math.min(90, ild * 90));
       compassAngleTarget = angle;
 
-      if (rms < 0.012) { lastDirLabel='Unknown'; lastAzDeg=0; }
-      else if (angle < -15) { lastDirLabel='Left'; lastAzDeg=Math.round(angle); }
-      else if (angle > 15) { lastDirLabel='Right'; lastAzDeg=Math.round(angle); }
-      else { lastDirLabel='Center'; lastAzDeg=Math.round(angle); }
+      // derive label
+      const ratio = (rmsR + rmsL) ? Math.max(rmsL, rmsR) / (rmsR + rmsL) : 0;
+      if (lastEnergyRMS < 0.012) { // too quiet
+        lastDirLabel = 'Unknown';
+        lastAzDeg = 0;
+      } else if (angle < -15) {
+        lastDirLabel = 'Left'; lastAzDeg = Math.round(angle);
+      } else if (angle > 15) {
+        lastDirLabel = 'Right'; lastAzDeg = Math.round(angle);
+      } else {
+        lastDirLabel = 'Center'; lastAzDeg = Math.round(angle);
+      }
 
       if (dirText) dirText.textContent = lastDirLabel;
       if (azText)  azText.textContent  = `${Math.round(angle)}°`;
-    }
-
-    const now = performance.now();
-    if(now - lastClassifiedAt < CLASSIFY_INTERVAL_MS) return;
-    lastClassifiedAt = now;
-
-    // Warm-up + VAD
-    if(ringTotalWritten < ringBuffer.length * 0.8) {
-      // maintain ring buffer
-    } else if(rms < VAD_RMS_GATE) {
-      return;
     }
 
     // maintain ring buffer
@@ -779,7 +802,15 @@ async function updateLoop(){
     ringWrite = (ringWrite + M) % N;
     ringTotalWritten += M;
 
-    // slice ~1s
+    const now = performance.now();
+    if(now - lastClassifiedAt < CLASSIFY_INTERVAL_MS) return;
+    lastClassifiedAt = now;
+
+    // warm-up and VAD
+    if(ringTotalWritten < ringBuffer.length * 0.8) return;
+    if(rms < VAD_RMS_GATE) return;
+
+    // slice 1s
     const oneSec = new Float32Array(ringBuffer.length);
     const tail = ringBuffer.subarray(ringWrite);
     const head = ringBuffer.subarray(0, ringWrite);
@@ -790,27 +821,18 @@ async function updateLoop(){
     if(res.top5) renderTop5(res.top5);
 
     const threshold = parseFloat(thresholdInput.value || '0.75');
+
     let pred = { label:null, score:0, friendly:null, confidence:null };
 
     // prefer strong custom
     if(res.custom?.label && res.custom.score >= threshold){
       pred = { label: res.custom.label, score: res.custom.score, friendly: friendlyFromRawLabel(res.custom.label), confidence: null };
     }
-
-    // fallback to pretrained
-    if(!pred.label && res.pretrained?.label){
-      const conf = +res.pretrained.score || 0;
-      // ---- RELAX: allow Speech even if conf is low when user is clearly speaking (RMS high)
-      const isSpeech = /speech|talk|voice/i.test(res.pretrained.label);
-      const pass = conf >= PRETRAINED_MIN_CONF || (isSpeech && rms >= SPEECH_RMS_OVERRIDE);
-      if(pass){
-        pred = { label: res.pretrained.label, score: conf, friendly: res.friendly, confidence: conf };
-      }
-    }
-
-    // if still nothing, but VAD open: log as Other (so logs aren't empty during activity)
-    if(!pred.label){
-      pred = { label: 'Other', score: 0, friendly: null, confidence: null };
+    // else fallback to pretrained if confident
+    else if(res.pretrained?.label && (res.pretrained.score || 0) >= PRETRAINED_MIN_CONF){
+      pred = { label: res.pretrained.label, score: +res.pretrained.score || 0, friendly: res.friendly, confidence: +res.pretrained.score || 0 };
+    } else {
+      return; // too weak
     }
 
     const voted = pushAndVote(pred);
@@ -819,24 +841,25 @@ async function updateLoop(){
     const finalConf = pred.confidence;
     const icon = iconForFriendly(voted.friendly ?? friendlyFromRawLabel(finalLabel) ?? 'Other');
 
-    const direction = `${lastDirLabel}`;
-    const entry = { when: nowIso(), label: finalLabel, similarity: finalScore, confidence: finalConf, direction, icon };
-
-    const last = logs[logs.length-1];
-    if(!loggingPaused && (!last || last.label!==entry.label || (new Date(entry.when)-new Date(last.when)>3000))){
-      logs.push(entry); saveLogs(); renderLogs();
-      try{
-        listenBtn.animate(
-          [{transform:'translateY(0) scale(1)'},{transform:'translateY(-6px) scale(1.03)'},{transform:'translateY(0) scale(1)'}],
-          {duration:420, easing:'ease-out'}
-        );
-      }catch{}
+    if(finalLabel){
+      // use the live compass direction
+      const direction = `${lastDirLabel}`;
+      const entry = { when: nowIso(), label: finalLabel, similarity: finalScore, confidence: finalConf, direction, icon };
+      const last = logs[logs.length-1];
+      if(!loggingPaused && (!last || last.label!==entry.label || (new Date(entry.when)-new Date(last.when)>3000))){
+        logs.push(entry); saveLogs(); renderLogs();
+        try{
+          listenBtn.animate(
+            [{transform:'translateY(0) scale(1)'},{transform:'translateY(-6px) scale(1.03)'},{transform:'translateY(0) scale(1)'}],
+            {duration:420, easing:'ease-out'}
+          );
+        }catch{}
+      }
     }
-
   }catch(e){ console.warn('updateLoop error', e); }
 }
 
-// ======================== Startup ========================
+//////////////////////// Startup ////////////////////////
 thresholdLabel.textContent = thresholdInput.value;
 thresholdInput.addEventListener('input', ()=> thresholdLabel.textContent = thresholdInput.value);
 modelSelector?.addEventListener('change', async ()=>{
@@ -845,6 +868,6 @@ modelSelector?.addEventListener('change', async ()=>{
 (async function init(){
   loadModel(); loadLogs(); await loadYamnet(); await loadClassMap();
   modelSummary.textContent='Ready';
-  drawVisualizer();
-  drawCompass(0,0);
+  drawVisualizer(); // paint once before listening
+  drawCompass(0, 0); // paint the dial once if present
 })();
